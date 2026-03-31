@@ -1,20 +1,21 @@
-# PRESENT Cipher as a Deep Neural Network (Implemented)
+# PRESENT Cipher as a Deep Neural Network (PyTorch Implementation)
 
 ## 1) Project Status
 
-This repository now contains a working implementation of **PRESENT-80 encryption** expressed through DNN-style fixed operations (no training):
+This repository contains a **fully working PRESENT-80 encryption** implementation using **PyTorch neural networks** with no learnable parameters—all operations are fixed, deterministic transforms:
 
-- Bit vectors represented as float32 values in {0.0, 1.0}
-- XOR implemented as ReLU composition
-- S-box implemented as fixed two-layer corner-function network
-- P-layer implemented as a fixed permutation matrix
-- 80-bit key schedule implemented with rotation, top-nibble S-box, and round counter XOR
-- Full 31-round encryption + final whitening key (K32)
-- Verification script and pytest suite passing official Appendix-I vectors
-- Custom CLI runner for hex plaintext and UTF-8 text input
-- Optional detailed round-by-round trace output
+### Core Features
+- **XORNet**: XOR operation as a 2-layer ReLU network (fixed hardcoded weights)
+- **SBoxLayer**: 4-bit S-box as a corner-function 2-layer neural network
+- **PermutationLayer**: 64-bit P-layer as a sparse permutation matrix
+- **Key Schedule**: NumPy-based with internal use of NN primitives for S-box and XOR
+- **Full Encryption**: 31 rounds + final whitening key (K32)
+- **Bit Format**: Float32 tensors in {0.0, 1.0} with LSB-first indexing
+- **Verification**: All 4 official test vectors passing
+- **Custom CLI**: Hex plaintext, UTF-8 text input, optional trace output
+- **Test Suite**: Comprehensive pytest coverage with custom test runner
 
-Current scope is intentionally focused on **80-bit key mode only**.
+**Scope**: 80-bit key mode only (PRESENT-80)
 
 ---
 
@@ -28,25 +29,26 @@ present_dnn/
 ├── requirements.txt
 ├── run_custom.py
 │
-├── primitives/
+├── primitives/                    # PyTorch NN implementations
 │   ├── __init__.py
-│   ├── xor_layer.py
-│   ├── sbox_layer.py
-│   └── permutation_layer.py
+│   ├── xor_layer_nn.py           # XORNet: 2-layer ReLU XOR
+│   ├── sbox_layer_nn.py          # SBoxLayer: corner-function S-box
+│   └── permutation_layer_nn.py   # PermutationLayer: sparse matrix
 │
 ├── cipher/
 │   ├── __init__.py
-│   ├── key_schedule.py
-│   ├── round_layer.py
-│   └── present_dnn.py
+│   ├── key_schedule.py           # NumPy-based with NN primitives internally
+│   └── present_dnn.py            # Full 31-round encryption pipeline
 │
 ├── utils/
 │   ├── __init__.py
-│   ├── bit_utils.py
-│   └── verify.py
+│   ├── bit_utils.py              # NumPy bit conversions
+│   ├── bit_utils_torch.py        # PyTorch bit conversions
+│   └── verify.py                 # Official test vectors
 │
 ├── tests/
-│   └── test_present_dnn.py
+│   ├── test_present_dnn.py       # Pytest suite
+│   └── run_tests.py              # Custom test runner
 │
 └── notebooks/
     └── present_dnn_walkthrough.ipynb
@@ -55,90 +57,92 @@ present_dnn/
 ## 2.2 Module-by-Module Summary
 
 ### `present_dnn/utils/bit_utils.py`
-Implemented helper conversions with LSB-first indexing:
+NumPy-based helper conversions with LSB-first indexing:
 
-- `int_to_bitvec(x, width)`
-- `bitvec_to_int(v)`
-- `hex_to_bitvec(hex_str, width=None)`
+- `int_to_bitvec(x, width)`: Integer to bit vector (NumPy array)
+- `bitvec_to_int(v)`: Bit vector to integer
+- `hex_to_bitvec(hex_str, width=None)`: Hex string to bit vector
 
-Validation and boundary checks are included for width and value ranges.
+Validation and boundary checks included for width and value ranges.
 
-### `present_dnn/primitives/xor_layer.py`
-Implemented exact bitwise XOR via ReLU identity:
+### `present_dnn/utils/bit_utils_torch.py` (NEW)
+PyTorch-based equivalents for tensor operation:
+
+- `int_to_bitvec_torch(x, width, dtype=torch.float32, device='cpu')`
+- `bitvec_to_int_torch(v)`: Tensor to integer
+- `hex_to_bitvec_torch(hex_str, width=None, dtype=torch.float32)`
+
+Used internally by NN primitives for tensor conversions.
+
+### `present_dnn/primitives/xor_layer_nn.py`
+**PyTorch neural network implementing XOR** via ReLU identity:
 
 $$
 \mathrm{XOR}(a,b) = \mathrm{ReLU}(a-b) + \mathrm{ReLU}(b-a)
 $$
 
-Function:
-- `nn_xor(a, b)`
+Class:
+- `XORNet(input_size=2)`: 2 hidden neurons (ReLU) with hardcoded weights `W1=[[1,-1],[-1,1]]` and `W2=[1,1]`
+- Forward pass: `(inputs) -> hidden (ReLU) -> output`
+- Supports batched operation with shape `(batch_size, input_size)`
 
-### `present_dnn/primitives/sbox_layer.py`
-Implemented PRESENT S-box as fixed DNN weights:
+### `present_dnn/primitives/sbox_layer_nn.py`
+**PyTorch neural network implementing PRESENT S-box** as a corner-function 2-layer network:
 
 - `SBOX` constant: `[0xC, 0x5, 0x6, 0xB, 0x9, 0x0, 0xA, 0xD, 0x3, 0xE, 0xF, 0x8, 0x4, 0x7, 0x1, 0x2]`
-- `build_sbox_weights(sbox=SBOX, c=0.5)`
-- `apply_sbox_dnn(nibble, W1, b1, W2)`
+- `SBoxLayer()`: Takes 4-bit nibble input, outputs 4-bit S-box result
 
 Implementation details:
-- Layer 1 detects each corner/input pattern.
-- Layer 2 sums selected corners per output bit.
-- Output is rounded/clipped to binary.
+- **Layer 1**: 16 neurons detect which of 16 corners the input matches (ReLU activation)
+- **Layer 2**: 4 output neurons sum selected corners to compute each output bit
+- Fixed, non-trainable weights derived from S-box truth table
+- Supports batched operation with shape `(batch_size, 4)`
 
-### `present_dnn/primitives/permutation_layer.py`
-Implemented P-layer as matrix multiply:
+### `present_dnn/primitives/permutation_layer_nn.py`
+**PyTorch implementation of P-layer** as a sparse permutation matrix:
 
-- `build_player_matrix(n_bits=64)`
-- `apply_player(state, W_p)`
-
-Permutation rule used:
-- `P(i) = (16 * i) mod 63` for `i in [0, 62]`
-- `P(63) = 63`
+- `PermutationLayer()`: Takes 64-bit state, outputs permuted 64-bit state
+- Permutation rule: `P(i) = (16 * i) mod 63` for `i in [0, 62]`, `P(63) = 63`
+- Implemented as 64×64 sparse matrix (one 1.0 per column, rest zeros)
+- Forward pass: dense matrix-vector multiplication `W @ state`
+- Non-trainable weights, supports batched operation with shape `(batch_size, 64)`
 
 ### `present_dnn/cipher/key_schedule.py`
-Implemented PRESENT-80 key schedule:
+**PRESENT-80 key schedule** using NN primitives internally:
 
-- `build_key_rotation_matrix(key_len=80, rotate_by=61)`
-- `compute_all_round_keys(master_key)`
+- `compute_all_round_keys(master_key)`: Takes 80-bit master key, returns 32 round keys
 
 Behavior:
-1. Extract round key `K_i` from key register bits `k79..k16` (LSB-first indices `[16:80]`).
+1. Extract round key `K_i` from key register bits `k79..k16` (LSB-first indices `[16:80]`)
 2. If `i < 32`, update register:
    - rotate left by 61
-   - apply S-box to bits `[76:80]`
-   - XOR 5-bit round counter into bits `[15:20]`
-3. Return `K1..K32` as 32 vectors.
+   - apply `SBoxLayer` (NN) to bits `[76:80]`
+   - XOR 5-bit round counter into bits `[15:20]` using `XORNet` (NN)
+3. Return `K1..K32` as 32 bit-vector arrays
 
-### `present_dnn/cipher/round_layer.py`
-Implemented one round of PRESENT:
+**Note**: Uses PyTorch NN primitives internally (SBoxLayer, XORNet) but maintains NumPy-compatible interface for key output
 
-- `present_round(state, round_key, W_p, sbox_params)`
 
-Round steps:
-1. addRoundKey (`nn_xor`)
-2. sBoxLayer across 16 nibbles
-3. pLayer via `W_p @ state`
 
 ### `present_dnn/cipher/present_dnn.py`
-Implemented top-level encryption APIs:
+**Full PRESENT-80 encryption pipeline** using PyTorch NN primitives:
 
-- `present_encrypt(plaintext_int, key_int, key_bits=80)`
-- `present_encrypt_with_trace(plaintext_int, key_int, key_bits=80)`
+- `present_encrypt(plaintext_int, key_int, key_bits=80)`: Main encryption function
+- `present_encrypt_with_trace(plaintext_int, key_int, key_bits=80)`: Returns ciphertext + detailed trace
 
 `present_encrypt`:
-- validates key/plaintext sizes
-- runs 31 rounds
-- applies final whitening with `K32`
-- returns ciphertext integer
+- Validates key (80-bit) and plaintext (64-bit) sizes
+- Runs 31 rounds, each calling:
+  - `XORNet` for addRoundKey
+  - `SBoxLayer` applied to 16 nibbles
+  - `PermutationLayer` for P-layer permutation
+- Applies final whitening XOR with `K32`
+- Returns ciphertext as integer
 
 `present_encrypt_with_trace`:
-- returns `(ciphertext, trace)`
-- trace includes per-round:
-  - round key
-  - state after addRoundKey
-  - state after S-box
-  - state after P-layer
-- includes final whitening summary at round 32
+- Returns `(ciphertext, trace_dict)` with per-round state snapshots
+- Trace includes: round key, state after addRoundKey, after S-box, after P-layer
+- Useful for debugging and verification
 
 ### `present_dnn/utils/verify.py`
 Implemented known-answer verification using 4 official vectors from Appendix I:
@@ -169,18 +173,24 @@ Implemented custom CLI runner for practical usage:
 
 ## 3) How It Works (End-to-End)
 
-For one 64-bit block:
+For one 64-bit plaintext block:
 
-1. Convert plaintext int to 64-bit LSB-first vector.
-2. Compute all round keys `K1..K32` from 80-bit master key.
-3. Repeat 31 times:
-   - XOR with round key
-   - apply S-box on 16 nibbles
-   - apply permutation matrix
-4. Final whitening XOR with `K32`.
-5. Convert final bit vector back to 64-bit integer.
+### Encryption Flow
+1. **Bit Conversion**: Convert 64-bit plaintext integer to LSB-first bit vector using NumPy
+2. **Key Schedule**: Compute all 32 round keys using key_schedule.py
+   - Uses NumPy rotation + internal SBoxLayer (NN) + XORNet (NN) for updates
+3. **Rounds (×31)**:
+   - **AddRoundKey**: XOR with Ki using XORNet (ReLU-based 2-layer NN)
+   - **SubBytes**: Apply SBoxLayer (corner-function 2-layer NN) to each 16 nibbles
+   - **PermutationLayer**: Apply sparse P-matrix using 64×64 fixed sparse matrix
+4. **Final Whitening**: XOR with K32 using XORNet
+5. **Output**: Convert final bit vector back to 64-bit integer ciphertext
 
-No learned parameters are used. All matrices/weights are deterministic from spec logic.
+### Key Properties
+- All operations are fixed (no learned/trainable parameters)
+- All operations are deterministic (same input → same output)
+- Uses PyTorch tensors (float32 in {0.0, 1.0}) with hardcoded weights
+- Weights derived from PRESENT-80 specification, not learned
 
 ---
 
@@ -190,44 +200,59 @@ No learned parameters are used. All matrices/weights are deterministic from spec
 
 From repository root:
 
-```powershell
-c:/Users/kunal/OneDrive/Desktop/Present/.venv/Scripts/python.exe -m pip install -r present_dnn/requirements.txt
+```bash
+pip install -r present_dnn/requirements.txt
 ```
+
+**Requirements**: PyTorch, NumPy
 
 ## 4.2 Run Official Verification Vectors
 
-```powershell
-c:/Users/kunal/OneDrive/Desktop/Present/.venv/Scripts/python.exe -m present_dnn.utils.verify
+```bash
+python -m present_dnn.utils.verify
 ```
 
 Expected: all four vectors print `[PASS]`.
 
 ## 4.3 Run Tests
 
-```powershell
-c:/Users/kunal/OneDrive/Desktop/Present/.venv/Scripts/python.exe -m pytest present_dnn/tests -q
+**Option 1: Custom test runner** (no pytest required):
+```bash
+python present_dnn/tests/run_tests.py
 ```
 
-Current status during implementation: `6 passed`.
+**Option 2: With pytest** (if available):
+```bash
+pytest present_dnn/tests/test_present_dnn.py -v
+```
+
+Current status: **All 6 tests passing** ✓
 
 ## 4.4 Custom Run: Hex Plaintext
 
-```powershell
-c:/Users/kunal/OneDrive/Desktop/Present/.venv/Scripts/python.exe -m present_dnn.run_custom --key 00000000000000000000 --pt 0000000000000000
+```bash
+python -m present_dnn.run_custom --key 00000000000000000000 --pt 0000000000000000
+```
+
+Output:
+```
+BLOCK 0
+  PT: 0000000000000000
+  CT: 5579c1387b228445
 ```
 
 ## 4.5 Custom Run: Hex Plaintext with Step Trace
 
-```powershell
-c:/Users/kunal/OneDrive/Desktop/Present/.venv/Scripts/python.exe -m present_dnn.run_custom --key 00000000000000000000 --pt 0000000000000000 --trace
+```bash
+python -m present_dnn.run_custom --key 00000000000000000000 --pt 0000000000000000 --trace
 ```
 
-Trace includes `R01..R31` with `K`, `ARK`, `SB`, `PL`, then final `R32` whitening line.
+Trace includes `R01..R31` with per-round state snapshots (K, ARK, SB, PL), then final `R32` whitening.
 
 ## 4.6 Custom Run: Text Input
 
-```powershell
-c:/Users/kunal/OneDrive/Desktop/Present/.venv/Scripts/python.exe -m present_dnn.run_custom --key 00000000000000000000 --text "Hi"
+```bash
+python -m present_dnn.run_custom --key 00000000000000000000 --text "Hi"
 ```
 
 Expected style of output:
@@ -248,41 +273,63 @@ Why plaintext appears as `4869000000000000`:
 
 ## 5) Validation Results
 
-The following correctness checks are implemented and passing:
+✅ **All correctness checks passing**:
 
-- Official Appendix-I vectors:
-  - `PT=0000000000000000, KEY=00000000000000000000 -> CT=5579c1387b228445`
-  - `PT=0000000000000000, KEY=ffffffffffffffffffff -> CT=e72c46c0f5945049`
-  - `PT=ffffffffffffffff, KEY=00000000000000000000 -> CT=a112ffc72f68417b`
-  - `PT=ffffffffffffffff, KEY=ffffffffffffffffffff -> CT=3333dcd3213210d2`
-- S-box exactness for all 16 input nibbles
-- P-layer permutation mapping correctness for all bit positions
-- Key schedule cross-checked against integer reference implementation
-- Initial round key checks for all-zero master key (`K1=0`, `K2=c000000000000000`)
+### Official Appendix-I Test Vectors
+| Plaintext | Key | Ciphertext |
+|-----------|-----|------------|
+| `0000000000000000` | `00000000000000000000` | `5579c1387b228445` ✓ |
+| `0000000000000000` | `ffffffffffffffffffff` | `e72c46c0f5945049` ✓ |
+| `ffffffffffffffff` | `00000000000000000000` | `a112ffc72f68417b` ✓ |
+| `ffffffffffffffff` | `ffffffffffffffffffff` | `3333dcd3213210d2` ✓ |
+
+### Component Tests
+- **S-box**: Exactness verified for all 16 input nibbles via `SBoxLayer`
+- **P-layer**: Permutation mapping verified for all 64 bit positions via `PermutationLayer`
+- **Key Schedule**: Cross-checked against integer reference implementation for multiple keys
+- **Round Keys**: Initial checks for all-zero master key (`K1=0x0000000000000000`, `K2=0xc000000000000000`)
+- **Bit Conversions**: Roundtrip int↔bitvec verified for multiple values
 
 ---
 
 ## 6) Design Choices and Notes
 
-- Numeric type: `float32`
-- Bit ordering: **LSB-first arrays** throughout
-- XOR: ReLU-based exact identity on binary inputs
-- S-box output: rounded/clipped to keep binary stability
-- Key schedule update stops after producing `K32` (used for final whitening)
+### Numeric Representation
+- **Tensor Type**: PyTorch `float32`
+- **Bit Ordering**: **LSB-first arrays** throughout (bit 0 = least significant)
+- **Binary Convention**: Bits represented as {0.0, 1.0} in float space
+
+### Implementation Strategy
+- **XOR**: ReLU-based exact identity: `ReLU(a-b) + ReLU(b-a)`
+- **S-box**: Corner-function detection with 16 detection neurons + 4 output neurons
+- **P-layer**: Sparse matrix multiplication (one 1.0 per column)
+- **Key Schedule**: NumPy-based main logic with NN primitives for S-box and XOR operations
+- **No Trainable Parameters**: All weights are fixed, deterministic derived from spec
+
+### Key Schedule Notes
+- Updates key register 31 times to produce round keys `K1..K32` 
+- Final key `K32` is used for whitening after the 31 rounds
+- Internal use of `SBoxLayer` and `XORNet` ensures NN consistency
 
 ---
 
-## 7) Known Scope and Limitations
+## 7) Scope and Limitations
 
-- Implemented key size: **80-bit only**
-- `key_bits != 80` currently raises `ValueError`
-- Text mode in CLI is block conversion convenience only:
-  - zero padding
-  - no IV/nonce
-  - no mode of operation (ECB-like per-block processing)
-  - no authentication
+### Supported Features
+- ✓ PRESENT-80 (80-bit key, 64-bit block)
+- ✓ Full 31-round + final whitening encryption
+- ✓ PyTorch tensor-based primitives with CPU/GPU support
+- ✓ Detailed trace output for verification
+- ✓ Official test vector validation
 
-For secure message encryption use a proper mode (for example CTR/GCM) with nonce and authentication, not raw block output.
+### Intentional Limitations
+- **Key Size**: 80-bit only (PRESENT-128 not implemented)
+- **Decryption**: Encryption only (decryption not implemented)
+- **Modes**: Raw ECB-like per-block processing, no CBC/CTR/authenticated modes
+- **CLI Text Mode**: Simple zero-padding, no proper mode of operation
+
+### Security Note
+For production use: combine with proper mode (CTR/GCM) + nonce + authentication. This implementation is for educational/research purposes with fixed operations.
 
 ---
 
@@ -306,10 +353,19 @@ It demonstrates:
 
 ---
 
-## 10) Next Extensions (Not Yet Implemented)
+## 10) Future Extensions (Not Yet Implemented)
 
-- Add PRESENT-128 key schedule support
-- Add explicit decryption path
-- Add mode-of-operation wrapper for text encryption demos (CTR/CBC) with proper IV handling
-- Add benchmark scripts comparing integer-only vs DNN-style implementation
-- Add PyTorch `nn.Module` wrappers with frozen weights
+### Algorithm Variants
+- [ ] PRESENT-128 key schedule support
+- [ ] Decryption path (inverse P-layer, inverse S-box, reverse key schedule)
+
+### Enhancements
+- [ ] GPU acceleration (move tensors to CUDA devices)
+- [ ] nn.Module wrappers for easier PyTorch integration
+- [ ] Batch processing utilities for multiple plaintexts
+- [ ] Benchmark scripts: PyTorch NN vs NumPy vs C reference implementations
+
+### Modes and Integration
+- [ ] Mode-of-operation wrapper (CTR mode) with IV handling
+- [ ] Authenticated encryption example
+- [ ] Integration with PyTorch Lightning for training-based extensions
