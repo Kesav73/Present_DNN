@@ -6,7 +6,7 @@ import torch
 import numpy as np
 
 from present_dnn.cipher.key_schedule import compute_all_round_keys
-from present_dnn.cipher.present_dnn import present_encrypt
+from present_dnn.cipher.present_dnn import present_encrypt, present_encrypt_with_trace
 from present_dnn.primitives.sbox_layer_nn import SBoxLayer, SBOX
 from present_dnn.primitives.permutation_layer_nn import PermutationLayer
 from present_dnn.utils.bit_utils import bitvec_to_int, int_to_bitvec
@@ -81,3 +81,20 @@ def test_known_first_round_keys_zero_master_key():
 def test_appendix_vectors():
     for pt, key, expected in TEST_VECTORS:
         assert present_encrypt(pt, key, key_bits=80) == expected
+
+
+def test_trace_requires_explicit_debug_mode():
+    pt, key, _ = TEST_VECTORS[0]
+    try:
+        present_encrypt_with_trace(pt, key, key_bits=80)
+    except ValueError as exc:
+        assert "debug_mode=True" in str(exc)
+    else:
+        raise AssertionError("trace output should be disabled by default")
+
+
+def test_trace_works_when_explicitly_enabled():
+    pt, key, _ = TEST_VECTORS[0]
+    ciphertext, trace = present_encrypt_with_trace(pt, key, key_bits=80, debug_mode=True)
+    assert isinstance(ciphertext, int)
+    assert len(trace) == 32

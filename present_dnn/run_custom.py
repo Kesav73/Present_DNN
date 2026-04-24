@@ -41,7 +41,12 @@ def _iter_block_results(
 ):
     for idx, block in enumerate(block_values):
         if show_trace:
-            ciphertext, trace = present_encrypt_with_trace(block, key_int, key_bits=80)
+            ciphertext, trace = present_encrypt_with_trace(
+                block,
+                key_int,
+                key_bits=80,
+                debug_mode=True,
+            )
             yield idx, block, ciphertext, trace
         else:
             ciphertext = present_encrypt(block, key_int, key_bits=80)
@@ -66,7 +71,7 @@ def main() -> int:
     parser.add_argument(
         "--trace",
         action="store_true",
-        help="Print detailed per-round states (only practical for one or few blocks)",
+        help="Print detailed per-round states (requires explicit debug-mode opt-in)",
     )
 
     args = parser.parse_args()

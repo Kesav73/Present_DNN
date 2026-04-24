@@ -47,6 +47,13 @@ def _parse_hex(value: str, bit_width: int) -> int:
     return parsed
 
 
+def _validate_binary_tensor(value: torch.Tensor, name: str) -> None:
+    if value.numel() == 0:
+        raise ValueError(f"{name} must not be empty")
+    if not torch.all((value == 0.0) | (value == 1.0)):
+        raise ValueError(f"{name} must be strictly binary (values in {{0.0, 1.0}})")
+
+
 def _build_first_round_oracle(secret_key: int) -> VectorOracle:
     """Return oracle for first AddRoundKey output on real-valued plaintext vectors.
 
@@ -62,7 +69,9 @@ def _build_first_round_oracle(secret_key: int) -> VectorOracle:
     def oracle(plaintext_vec: torch.Tensor) -> torch.Tensor:
         if plaintext_vec.shape != (64,):
             raise ValueError("plaintext_vec must be shape (64,)")
-        return xor_nn(plaintext_vec.to(dtype=torch.float32), k1)
+        plaintext_vec = plaintext_vec.to(dtype=torch.float32)
+        _validate_binary_tensor(plaintext_vec, "plaintext_vec")
+        return xor_nn(plaintext_vec, k1)
 
     return oracle
 
